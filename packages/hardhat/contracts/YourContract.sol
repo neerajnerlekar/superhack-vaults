@@ -3,6 +3,7 @@ pragma solidity >=0.8.0 <0.9.0;
 
 // Useful for debugging. Remove when deploying to a live network.
 import "hardhat/console.sol";
+import "./ERC4626Fees.sol";
 
 // Use openzeppelin to inherit battle-tested implementations (ERC20, ERC721, etc)
 // import "@openzeppelin/contracts/access/Ownable.sol";
@@ -10,78 +11,101 @@ import "hardhat/console.sol";
 /**
  * A smart contract that allows changing a state variable of the contract and tracking the changes
  * It also allows the owner to withdraw the Ether in the contract
- * @author BuidlGuidl
+ * @author Lotus
  */
-contract YourContract {
-	// State Variables
-	address public immutable owner;
-	string public greeting = "Building Unstoppable Apps!!!";
-	bool public premium = false;
-	uint256 public totalCounter = 0;
-	mapping(address => uint) public userGreetingCounter;
+contract YourContract is ERC4626Fees {
+	address payable public vaultOwner;
+	uint256 public entryFeeBasisPoints;
 
-	// Events: a way to emit log statements from smart contract that can be listened to by external parties
-	event GreetingChange(
-		address indexed greetingSetter,
-		string newGreeting,
-		bool premium,
-		uint256 value
-	);
-
-	// Constructor: Called once on contract deployment
-	// Check packages/hardhat/deploy/00_deploy_your_contract.ts
-	constructor(address _owner) {
-		owner = _owner;
+	constructor(
+		IERC20 _asset,
+		uint256 _basisPoints
+	) ERC4626(_asset) ERC20("Shares Vault Token", "vSHR") {
+		vaultOwner = payable(msg.sender);
+		entryFeeBasisPoints = _basisPoints;
 	}
 
-	// Modifier: used to define a set of rules that must be met before or after a function is executed
-	// Check the withdraw() function
-	modifier isOwner() {
-		// msg.sender: predefined variable that represents address of the account that called the current function
-		require(msg.sender == owner, "Not the Owner");
-		_;
-	}
-
-	/**
-	 * Function that allows anyone to change the state variable "greeting" of the contract and increase the counters
-	 *
-	 * @param _newGreeting (string memory) - new greeting to save on the contract
-	 */
-	function setGreeting(string memory _newGreeting) public payable {
-		// Print data to the hardhat chain console. Remove when deploying to a live network.
-		console.log(
-			"Setting new greeting '%s' from %s",
-			_newGreeting,
-			msg.sender
+	/** @dev See {IERC4626-deposit}. */
+	function deposit(
+		uint256 assets,
+		address receiver
+	) public virtual override returns (uint256) {
+		require(
+			assets <= maxDeposit(receiver),
+			"ERC4626: deposit more than max"
 		);
 
-		// Change state variables
-		greeting = _newGreeting;
-		totalCounter += 1;
-		userGreetingCounter[msg.sender] += 1;
+		uint256 shares = previewDeposit(assets);
+		_deposit(_msgSender(), receiver, assets, shares);
+		afterDeposit(assets, shares);
 
-		// msg.value: built-in global variable that represents the amount of ether sent with the transaction
-		if (msg.value > 0) {
-			premium = true;
-		} else {
-			premium = false;
-		}
-
-		// emit: keyword used to trigger an event
-		emit GreetingChange(msg.sender, _newGreeting, msg.value > 0, msg.value);
+		return shares;
 	}
 
-	/**
-	 * Function that allows the owner to withdraw all the Ether in the contract
-	 * The function can only be called by the owner of the contract as defined by the isOwner modifier
+	/** @dev See {IERC4626-mint}.
+	 *
+	 * As opposed to {deposit}, minting is allowed even if the vault is in a state where the price of a share is zero.
+	 * In this case, the shares will be minted without requiring any assets to be deposited.
 	 */
-	function withdraw() public isOwner {
-		(bool success, ) = owner.call{ value: address(this).balance }("");
-		require(success, "Failed to send Ether");
+	function mint(
+		uint256 shares,
+		address receiver
+	) public virtual override returns (uint256) {
+		require(shares <= maxMint(receiver), "ERC4626: mint more than max");
+
+		uint256 assets = previewMint(shares);
+		_deposit(_msgSender(), receiver, assets, shares);
+		afterDeposit(assets, shares);
+
+		return assets;
 	}
 
-	/**
-	 * Function that allows the contract to receive ETH
-	 */
-	receive() external payable {}
+	/** @dev See {IERC4626-redeem}. */
+	function redeem(
+		uint256 shares,
+		address receiver,
+		address owner
+	) public virtual override returns (uint256) {
+		require(shares <= maxRedeem(owner), "ERC4626: redeem more than max");
+
+		uint256 assets = previewRedeem(shares);
+		beforeWithdraw(assets, shares);
+		_withdraw(_msgSender(), receiver, owner, assets, shares);
+
+		return assets;
+	}
+
+	/** @dev See {IERC4626-withdraw}. */
+	function withdraw(
+		uint256 assets,
+		address receiver,
+		address owner
+	) public virtual override returns (uint256) {
+		require(
+			assets <= maxWithdraw(owner),
+			"ERC4626: withdraw more than max"
+		);
+
+		uint256 shares = previewWithdraw(assets);
+		beforeWithdraw(assets, shares);
+		_withdraw(_msgSender(), receiver, owner, assets, shares);
+
+		return shares;
+	}
+
+	function _entryFeeBasisPoints() internal view override returns (uint256) {
+		return entryFeeBasisPoints;
+	}
+
+	function _entryFeeRecipient() internal view override returns (address) {
+		return vaultOwner;
+	}
+
+	/*//////////////////////////////////////////////////////////////
+                          INTERNAL HOOKS LOGIC
+    //////////////////////////////////////////////////////////////*/
+
+	function afterDeposit(uint256 assets, uint256 shares) internal virtual {}
+
+	function beforeWithdraw(uint256 assets, uint256 shares) internal virtual {}
 }

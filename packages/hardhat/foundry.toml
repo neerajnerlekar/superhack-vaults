@@ -7,6 +7,13 @@ out = "foundry/out"
 script = "foundry/script"
 src = "contracts"
 test = "foundry/test"
+remappings = [
+    "forge-std/=lib/forge-std/src/",
+    "openzeppelin/=foundry/lib/openzeppelin-contracts/contracts/",
+    "evc/=foundry/lib/ethereum-vault-connector/src/",
+    "evc-playground/=lib/evc-playground/src/",
+    "a16z-erc4626-tests/=lib/erc4626-tests/",
+]
 
 # compiler settings
 solc_version = "0.8.24"
